@@ -1,0 +1,4 @@
+id,name,ward,sub_county,county,lat,lon,agro_zone,nearest_market
+CL-KHA,Khalaba cluster,Khalaba,Kanduyi,Bungoma,0.5905,34.5822,"LM1 (lower midland, sugarcane-maize zone)",Bungoma
+CL-MUS,Musikoma cluster,Musikoma,Kanduyi,Bungoma,0.5512,34.5243,"LM1 (lower midland, sugarcane-maize zone)",Bungoma
+CL-TUU,Tuuti cluster,Marakaru/Tuuti,Kanduyi,Bungoma,0.6187,34.5021,"LM1 (lower midland, sugarcane-maize zone)",Chwele

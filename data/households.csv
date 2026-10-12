@@ -1,0 +1,31 @@
+id,cluster_id,head_name,phone_masked,channel,language
+HH-001,CL-KHA,B. Wanjala,+2547XXXXX001,ussd,Luhya (Bukusu)
+HH-002,CL-KHA,N. Masinde,+2547XXXXX002,visit,English
+HH-003,CL-KHA,P. Wanjala,+2547XXXXX003,sms,English
+HH-004,CL-KHA,P. Wekesa,+2547XXXXX004,visit,Swahili
+HH-005,CL-KHA,C. Wamalwa,+2547XXXXX005,visit,Swahili
+HH-006,CL-KHA,J. Makokha,+2547XXXXX006,ussd,English
+HH-007,CL-KHA,V. Khaemba,+2547XXXXX007,ussd,English
+HH-008,CL-KHA,P. Wekesa,+2547XXXXX008,visit,English
+HH-009,CL-KHA,R. Nekesa,+2547XXXXX009,visit,English
+HH-010,CL-KHA,E. Barasa,+2547XXXXX010,sms,Luhya (Bukusu)
+HH-011,CL-MUS,E. Barasa,+2547XXXXX011,visit,English
+HH-012,CL-MUS,J. Masinde,+2547XXXXX012,visit,Luhya (Bukusu)
+HH-013,CL-MUS,R. Namalwa,+2547XXXXX013,ussd,Swahili
+HH-014,CL-MUS,P. Barasa,+2547XXXXX014,ussd,Swahili
+HH-015,CL-MUS,A. Nekesa,+2547XXXXX015,ussd,Luhya (Bukusu)
+HH-016,CL-MUS,P. Wanjala,+2547XXXXX016,sms,Luhya (Bukusu)
+HH-017,CL-MUS,E. Nekesa,+2547XXXXX017,ussd,Luhya (Bukusu)
+HH-018,CL-MUS,C. Masinde,+2547XXXXX018,sms,English
+HH-019,CL-MUS,G. Wamalwa,+2547XXXXX019,sms,Luhya (Bukusu)
+HH-020,CL-MUS,L. Wanjala,+2547XXXXX020,sms,English
+HH-021,CL-TUU,N. Masinde,+2547XXXXX021,sms,English
+HH-022,CL-TUU,A. Wamalwa,+2547XXXXX022,ussd,Luhya (Bukusu)
+HH-023,CL-TUU,A. Nafula,+2547XXXXX023,visit,Luhya (Bukusu)
+HH-024,CL-TUU,F. Nafula,+2547XXXXX024,sms,Luhya (Bukusu)
+HH-025,CL-TUU,L. Nafula,+2547XXXXX025,sms,English
+HH-026,CL-TUU,A. Wekesa,+2547XXXXX026,ussd,Swahili
+HH-027,CL-TUU,A. Wanjala,+2547XXXXX027,sms,Swahili
+HH-028,CL-TUU,N. Barasa,+2547XXXXX028,ussd,Swahili
+HH-029,CL-TUU,G. Namalwa,+2547XXXXX029,sms,Luhya (Bukusu)
+HH-030,CL-TUU,J. Barasa,+2547XXXXX030,ussd,Luhya (Bukusu)
