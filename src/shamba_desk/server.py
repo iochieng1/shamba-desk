@@ -35,7 +35,7 @@ class AdvisoryItem(BaseModel):
 
 
 def _out(value) -> str:
-    return json.dumps(value, ensure_ascii=False, indent=1)
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _call(fn, *args, **kwargs) -> str:
