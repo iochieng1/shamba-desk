@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS clusters (
 );
 CREATE TABLE IF NOT EXISTS households (
     id TEXT PRIMARY KEY, cluster_id TEXT REFERENCES clusters(id), head_name TEXT,
-    phone_masked TEXT, channel TEXT, language TEXT
+    phone_masked TEXT, channel TEXT, language TEXT, stored_produce TEXT
 );
 CREATE TABLE IF NOT EXISTS plots (
     id TEXT PRIMARY KEY, household_id TEXT REFERENCES households(id), area_acres REAL,
@@ -118,9 +118,9 @@ def seed(path: Path | str | None = None, data_dir: Path = DATA_DIR) -> Path:
                          (r["id"], r["name"], r["ward"], r["sub_county"], r["county"],
                           float(r["lat"]), float(r["lon"]), r["agro_zone"], r["nearest_market"]))
         for r in rows("households.csv"):
-            conn.execute("INSERT INTO households VALUES (?,?,?,?,?,?)",
+            conn.execute("INSERT INTO households VALUES (?,?,?,?,?,?,?)",
                          (r["id"], r["cluster_id"], r["head_name"], r["phone_masked"],
-                          r["channel"], r["language"]))
+                          r["channel"], r["language"], r["stored_produce"]))
         for r in rows("plots.csv"):
             conn.execute("INSERT INTO plots VALUES (?,?,?,?,?,?,?,?,?,?)",
                          (r["id"], r["household_id"], float(r["area_acres"]), r["crop"],

@@ -52,7 +52,7 @@ def get_cluster(conn, cluster_id: str) -> dict:
 def get_cluster_households(conn, cluster_id: str) -> dict:
     cluster = get_cluster(conn, cluster_id)
     households = _rows(conn.execute(
-        "SELECT id, head_name, channel, language FROM households "
+        "SELECT id, head_name, channel, language, stored_produce FROM households "
         "WHERE cluster_id = ? ORDER BY id", (cluster_id,)))
     today = date.today()
     for hh in households:

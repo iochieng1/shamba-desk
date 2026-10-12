@@ -70,6 +70,7 @@ def main():
                 f"+2547XXXXX{hh_n:03d}",
                 rng.choice(CHANNELS),
                 rng.choice(["Luhya (Bukusu)", "Luhya (Bukusu)", "Swahili", "English"]),
+                rng.choice(["", "", "", "beans 90 kg", "beans 180 kg", "maize 360 kg"]),
             ])
             for _ in range(rng.choice([1, 1, 2])):
                 plot_n += 1
@@ -93,7 +94,8 @@ def main():
 
     with open(OUT / "households.csv", "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["id", "cluster_id", "head_name", "phone_masked", "channel", "language"])
+        w.writerow(["id", "cluster_id", "head_name", "phone_masked", "channel", "language",
+                    "stored_produce"])
         w.writerows(households)
     with open(OUT / "plots.csv", "w", newline="") as f:
         w = csv.writer(f)
