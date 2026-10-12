@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from shamba-desk!")
+"""shamba-desk: sourced farm advisories, drafted by an agent, approved by an officer."""

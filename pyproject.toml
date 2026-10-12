@@ -1,7 +1,7 @@
 [project]
 name = "shamba-desk"
 version = "0.1.0"
-description = "Add your description here"
+description = "An agent that drafts sourced, officer-approved farm advisories for an extension office"
 readme = "README.md"
 authors = [
     { name = "iochieng1", email = "ochieng1044@gmail.com" }
@@ -18,7 +18,8 @@ dependencies = [
 ]
 
 [project.scripts]
-shamba-desk = "shamba_desk:main"
+shamba-desk = "shamba_desk.cli:main"
+shamba-desk-mcp = "shamba_desk.server:main"
 
 [build-system]
 requires = ["uv_build>=0.12.21,<0.13.0"]
