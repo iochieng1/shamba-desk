@@ -1,0 +1,90 @@
+# shamba-desk
+
+An agent that helps a sub-county agricultural extension office turn **rainfall, pest and price signals** into **household-level advisories**. It **drafts only**: a named officer approves every advisory before anything reaches a farmer, and every recommendation cites the record it came from.
+
+Target office: **Kanduyi Sub-County Agriculture Office, Bungoma County, Kenya** (short-rains season). Workflow: signals in → sourced draft per household cluster → officer approves, rejects or defers → approved messages queued for SMS, USSD or visit.
+
+> **Status: work in progress (hackathon build).** See [What is unfinished](#what-is-unfinished).
+
+## Quick start
+
+```bash
+# 1. Hosted open weights (fast)
+cp .env.example .env        # set SHAMBA_LLM_PROVIDER=groq and GROQ_API_KEY
+uv run shamba-desk run CL-KHA
+
+# 2. Fully local open weights (no data leaves the machine)
+docker compose run --rm desk     # Ollama + qwen2.5:7b, first start downloads ~4.7 GB
+```
+
+Needs Python 3.12 + [uv](https://docs.astral.sh/uv/) and Node 22+ (for the borrowed weather MCP server), or just Docker.
+
+## What it does
+
+```
+plan ──> act ⇄ tools ──> verify ──(problems)──> act      (max 2 repairs, 30 tool calls)
+                           │
+                           v
+                  gate: interrupt → named officer approves / rejects / defers
+```
+
+- **Plans** explicitly (a JSON plan stored with the run; falls back to a default plan if the model's plan is invalid).
+- **Calls tools** on two MCP servers, through one audited hub.
+- **Verifies with code, not the model grading itself:** a draft exists, every household is covered, rainfall was checked, households with missing or stale records get a follow-up visit instead of crop advice. Problems go back to the agent as concrete repair instructions.
+- **Recovers:** failed tool calls come back as readable errors, transient failures are retried once, and tool calls a small model writes as text are salvaged.
+- **Stops at the gate** (LangGraph `interrupt`). Nothing is sent and nothing is ordered by the agent.
+
+## MCP servers
+
+| Server | Built or borrowed | Tools |
+|---|---|---|
+| `extension-desk` (`src/shamba_desk/server.py`) | **Built** | read: `list_clusters`, `get_cluster_households`, `get_market_prices`, `get_pest_alerts` · write: `draft_advisory`, `schedule_followup`, `propose_input_request` |
+| [`open-meteo-mcp-server@2.4.2`](https://github.com/cmer81/open-meteo-mcp) | **Borrowed** (MIT) | `weather_forecast` (16 others hidden from the agent) |
+
+Why borrow the weather server: it already wraps Open-Meteo's forecast, archive, seasonal and ensemble APIs and is maintained upstream. Writing our own would add code without adding value. Its 10 KB schema is projected down to rainfall variables, so a 7B model can use it.
+
+`extension-desk` works with any MCP client: `uv run shamba-desk-mcp` (stdio).
+
+## Safety and defensibility, enforced in code
+
+- **Citations are validated, not trusted.** Each advisory item must cite a `PLOT-`/`HH-` record for every targeted household. Planting advice must cite a successful rainfall call (`CALL-<n>`), selling advice a `PRICE-` record, and spraying advice a `PEST-` alert. Invalid drafts are rejected with reasons and nothing is saved.
+- **Gate in the database:** a SQLite trigger refuses any outbox row unless the advisory was approved by a named officer. Approve, reject and send are officer CLI commands, not agent tools.
+- **Audit log:** every tool call and model call is stored with inputs, outputs, timestamps and actor (`agent` or `officer:<name>`). `shamba-desk log`.
+- **"Why?" view:** `shamba-desk show ADV-001` resolves every citation to its plot, price, pest report or rainfall total.
+- **Cost per run:** tokens and USD per run. `shamba-desk runs`.
+- **Prompt injection:** record text is treated as data. The agent has no tool that sends or orders, whatever a pest alert says.
+
+## Commands
+
+```
+shamba-desk seed | clusters | config
+shamba-desk run CL-KHA [--task "..."] [--defer] [--officer "Name"]
+shamba-desk show ADV-001
+shamba-desk approve|reject ADV-001 --officer "Name" [--note ...]
+shamba-desk send ADV-001 --officer "Name"     # refused unless approved
+shamba-desk log [--run RUN_ID] | runs
+shamba-desk eval --repeat 3 [--only T04]
+```
+
+## Evals and tests
+
+- `evals/tasks.yaml`: 10 tasks (routine clusters, price spike, price tool failing once, weather server down, prompt injection in a pest alert, asked to order and send, unknown cluster, pressure to advise a household with no plot record, spraying request without an alert). Each runs N times on a fresh DB with deterministic checks. Pass rate, tool-call spread and cost are reported to `evals/results/`.
+- `uv run pytest -m "not network"`: 18 offline tests for citation rules and the gate.
+- `uv run pytest`: also runs end-to-end graph tests with a scripted model against the real MCP servers.
+
+## Data
+
+`data/` is **synthetic**: 30 households in 3 clusters (Khalaba, Musikoma, Marakaru/Tuuti wards), plots, stored produce, KAMIS-style prices and 2 pest alerts. Places are real; people and numbers are not. Two deliberate gaps (HH-007 has no plot record, HH-024's record is 210 days old) test that the agent does not invent advice. Rainfall is **live** Open-Meteo data (CC BY 4.0). `data/office_guidance.md` holds the agronomy rules of thumb and is editable by the office.
+
+## What is unfinished
+
+- **No eval results yet.** The suite is built and tested with a scripted model, but has not been run against a real open-weights model on this machine (no GPU or API key during the build).
+- **Not yet validated with an extension officer.** The guidance in `data/office_guidance.md` is generic and needs officer review.
+- Docker Compose path written, but its full run is not yet verified.
+- Prices and households are synthetic; delivery (SMS/USSD) is a simulated outbox.
+- Weather is live, so eval inputs vary by day. Not yet recorded or replayed.
+- ARCHITECTURE.md, EVALS.md and the demo video are still to come.
+
+## Licence
+
+MIT. Weather data © Open-Meteo, CC BY 4.0.
