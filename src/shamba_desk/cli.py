@@ -205,6 +205,9 @@ def main(argv=None) -> int:
     e.add_argument("--only", nargs="*")
     args = p.parse_args(argv)
 
+    if args.cmd not in ("seed", "config", "eval") and not db.db_path().exists():
+        console.print(f"[dim]No database yet; seeding {db.db_path()}[/]")
+        db.seed()
     if args.cmd == "seed":
         console.print(f"Seeded {db.seed()}")
         return 0
