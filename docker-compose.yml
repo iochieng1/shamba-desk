@@ -1,0 +1,41 @@
+# One command, fully local, open weights: docker compose run --rm desk
+# First start downloads the model (~4.7 GB for qwen2.5:7b).
+services:
+  ollama:
+    image: ollama/ollama:0.6.5
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      retries: 30
+
+  pull-model:
+    image: ollama/ollama:0.6.5
+    environment:
+      OLLAMA_HOST: ollama:11434
+    entrypoint: ["ollama", "pull", "${SHAMBA_LLM_MODEL:-qwen2.5:7b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  desk:
+    build: .
+    environment:
+      SHAMBA_LLM_PROVIDER: ${SHAMBA_LLM_PROVIDER:-ollama}
+      SHAMBA_LLM_MODEL: ${SHAMBA_LLM_MODEL:-qwen2.5:7b}
+      SHAMBA_LLM_BASE_URL: ${SHAMBA_LLM_BASE_URL:-http://ollama:11434/v1}
+      SHAMBA_LLM_API_KEY: ${SHAMBA_LLM_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      SHAMBA_OFFICER: ${SHAMBA_OFFICER:-}
+    volumes:
+      - ./var:/app/var
+    stdin_open: true
+    tty: true
+    depends_on:
+      pull-model:
+        condition: service_completed_successfully
+
+volumes:
+  ollama:
