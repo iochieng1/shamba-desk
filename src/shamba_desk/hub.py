@@ -4,7 +4,8 @@ It connects to both MCP servers (ours and the borrowed Open-Meteo one),
 shows the model a small, curated set of tools, and wraps every call with:
 an audit-log row (inputs, outputs, timestamps), a CALL-<n> evidence id the
 model can cite, a timeout, one retry for transient upstream failures, and
-optional fault injection for evals (SHAMBA_FAULTS).
+optional fault injection for evals (SHAMBA_FAULTS). With SHAMBA_WEATHER=replay
+the weather tool answers from a recorded cassette instead (see weather.py).
 """
 
 import asyncio
@@ -17,6 +18,7 @@ from dataclasses import dataclass, field
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from . import weather
 from .db import ROOT, connect, db_path, finish_call, log_call
 
 OPEN_METEO_PACKAGE = os.environ.get("SHAMBA_OPEN_METEO_PKG", "open-meteo-mcp-server@2.4.2")
@@ -63,6 +65,7 @@ class ToolHub:
     run_id: str
     tools: dict = field(default_factory=dict)  # name -> (server, session, spec)
     faults: dict = field(default_factory=dict)
+    cassette: dict | None = None
     _stack: AsyncExitStack | None = None
 
     async def __aenter__(self):
@@ -73,7 +76,13 @@ class ToolHub:
         meteo = StdioServerParameters(command="npx", args=["-y", OPEN_METEO_PACKAGE], env=env)
         (ROOT / "var").mkdir(exist_ok=True)
         errlog = self._stack.enter_context(open(ROOT / "var" / "mcp-servers.log", "a"))
-        for name, params in (("extension-desk", desk), ("open-meteo", meteo)):
+        servers = [("extension-desk", desk), ("open-meteo", meteo)]
+        if weather.mode() == "replay":
+            self.cassette = weather.load()
+            servers.pop()
+            for tool in BORROWED_TOOLS:
+                self.tools[tool] = ("open-meteo", None, self._borrowed_spec(tool))
+        for name, params in servers:
             read, write = await self._stack.enter_async_context(stdio_client(params, errlog))
             session = await self._stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
@@ -94,19 +103,24 @@ class ToolHub:
     @staticmethod
     def _spec(server: str, tool) -> dict | None:
         if server == "open-meteo":
-            borrowed = BORROWED_TOOLS.get(tool.name)
-            if not borrowed:
+            if tool.name not in BORROWED_TOOLS:
                 return None  # 16 other tools exist; the agent does not need them
-            schema, desc = borrowed["schema"], borrowed["description"]
-        else:
-            schema = json.loads(json.dumps(tool.inputSchema))
-            for arg in HIDDEN_ARGS:
-                schema.get("properties", {}).pop(arg, None)
-                if arg in schema.get("required", []):
-                    schema["required"].remove(arg)
-            desc = tool.description or ""
+            return ToolHub._borrowed_spec(tool.name)
+        schema = json.loads(json.dumps(tool.inputSchema))
+        for arg in HIDDEN_ARGS:
+            schema.get("properties", {}).pop(arg, None)
+            if arg in schema.get("required", []):
+                schema["required"].remove(arg)
+        return {"type": "function", "function": {"name": tool.name,
+                                                 "description": tool.description or "",
+                                                 "parameters": schema}}
+
+    @staticmethod
+    def _borrowed_spec(name: str) -> dict:
+        borrowed = BORROWED_TOOLS[name]
         return {"type": "function",
-                "function": {"name": tool.name, "description": desc, "parameters": schema}}
+                "function": {"name": name, "description": borrowed["description"],
+                             "parameters": borrowed["schema"]}}
 
     def specs(self) -> list[dict]:
         return [spec for _, _, spec in self.tools.values()]
@@ -135,6 +149,12 @@ class ToolHub:
                 if fault and (fault.mode == "always" or fault.fired == 0):
                     fault.fired += 1
                     raise TimeoutError("injected fault: upstream did not respond")
+                if session is None:  # replayed weather
+                    try:
+                        text, error = weather.replay(args, self.cassette), None
+                    except weather.WeatherReplayError as e:
+                        text = error = str(e)
+                    break
                 result = await asyncio.wait_for(session.call_tool(name, args), CALL_TIMEOUT_S)
                 text = "\n".join(c.text for c in result.content if getattr(c, "text", None))
                 error = text if result.isError else None
@@ -153,3 +173,28 @@ class ToolHub:
         if len(text) > MAX_RESULT_CHARS:
             text = text[:MAX_RESULT_CHARS] + "\n... [truncated; full result in audit log]"
         return True, f"[{tag}] (cite as {tag})\n{text}", call_id
+
+
+async def record_weather(points: list[tuple[float, float]]) -> dict[str, dict]:
+    """Ask the live Open-Meteo server for the widest window at each point, for
+    weather.save(). Fails loudly: a cassette with holes would make evals lie."""
+    params = StdioServerParameters(command="npx", args=["-y", OPEN_METEO_PACKAGE],
+                                   env=dict(os.environ))
+    (ROOT / "var").mkdir(exist_ok=True)
+    recorded = {}
+    with open(ROOT / "var" / "mcp-servers.log", "a") as errlog:
+        async with (stdio_client(params, errlog) as (read, write),
+                    ClientSession(read, write) as session):
+            await session.initialize()
+            for lat, lon in points:
+                key = weather.grid_key(lat, lon)
+                if key in recorded:
+                    continue
+                result = await asyncio.wait_for(session.call_tool(
+                    "weather_forecast", weather.record_args(lat, lon, RAIN_VARS)),
+                    CALL_TIMEOUT_S)
+                text = "\n".join(c.text for c in result.content if getattr(c, "text", None))
+                if result.isError:
+                    raise RuntimeError(f"weather_forecast failed at {key}: {text}")
+                recorded[key] = json.loads(text)
+    return recorded

@@ -63,18 +63,20 @@ shamba-desk show ADV-001
 shamba-desk approve|reject ADV-001 --officer "Name" [--note ...]
 shamba-desk send ADV-001 --officer "Name"     # refused unless approved
 shamba-desk log [--run RUN_ID] | runs
-shamba-desk eval --repeat 3 [--only T04]
+shamba-desk eval --repeat 3 [--only T04] [--live-weather]
+shamba-desk weather record | info              # the recorded rainfall evals replay
 ```
 
 ## Evals and tests
 
+- **Weather is recorded, so runs are comparable.** `shamba-desk weather record` stores 92 past and 16 forecast days of rainfall for every cluster in `evals/weather/cassette.json`. Evals and tests replay it (`SHAMBA_WEATHER=replay`), cutting out whatever window the model asks for and shifting dates to today, so the agent sees the same rain on any day and no network is needed. `--live-weather` uses Open-Meteo instead. Results say which weather they ran on.
 - `evals/tasks.yaml`: 10 tasks (routine clusters, price spike, price tool failing once, weather server down, prompt injection in a pest alert, asked to order and send, unknown cluster, pressure to advise a household with no plot record, spraying request without an alert). Each runs N times on a fresh DB with deterministic checks. Pass rate, tool-call spread and cost are reported to `evals/results/`.
-- `uv run pytest -m "not network"`: 18 offline tests for citation rules and the gate.
-- `uv run pytest`: also runs end-to-end graph tests with a scripted model against the real MCP servers.
+- `uv run pytest -m "not network"`: 31 offline tests: citation rules, the gate, weather replay, and end-to-end graph and eval-harness runs with a scripted model against the real `extension-desk` server on recorded weather.
+- `uv run pytest`: also runs the graph test once against the live Open-Meteo server.
 
 ## Data
 
-`data/` is **synthetic**: 30 households in 3 clusters (Khalaba, Musikoma, Marakaru/Tuuti wards), plots, stored produce, KAMIS-style prices and 2 pest alerts. Places are real; people and numbers are not. Two deliberate gaps (HH-007 has no plot record, HH-024's record is 210 days old) test that the agent does not invent advice. Rainfall is **live** Open-Meteo data (CC BY 4.0). `data/office_guidance.md` holds the agronomy rules of thumb and is editable by the office.
+`data/` is **synthetic**: 30 households in 3 clusters (Khalaba, Musikoma, Marakaru/Tuuti wards), plots, stored produce, KAMIS-style prices and 2 pest alerts. Places are real; people and numbers are not. Two deliberate gaps (HH-007 has no plot record, HH-024's record is 210 days old) test that the agent does not invent advice. Rainfall is real Open-Meteo data (CC BY 4.0): live for `run`, recorded for evals and tests. `data/office_guidance.md` holds the agronomy rules of thumb and is editable by the office.
 
 ## What is unfinished
 
@@ -82,7 +84,6 @@ shamba-desk eval --repeat 3 [--only T04]
 - **Not yet validated with an extension officer.** The guidance in `data/office_guidance.md` is generic and needs officer review.
 - Docker Compose path written, but its full run is not yet verified.
 - Prices and households are synthetic; delivery (SMS/USSD) is a simulated outbox.
-- Weather is live, so eval inputs vary by day. Not yet recorded or replayed.
 - ARCHITECTURE.md, EVALS.md and the demo video are still to come.
 
 ## Licence

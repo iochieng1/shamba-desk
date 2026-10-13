@@ -1,8 +1,7 @@
-"""The eval harness itself, driven by a scripted model (needs network)."""
+"""The eval harness itself, driven by a scripted model on recorded weather."""
 
 import functools
 
-import pytest
 import yaml
 from langchain_core.messages import AIMessage
 
@@ -10,8 +9,6 @@ from shamba_desk import evals
 from shamba_desk.agent import run_agent
 
 from .fakes import ScriptedLLM, tool_call
-
-pytestmark = pytest.mark.network
 
 
 async def test_unknown_cluster_task_passes_its_checks(tmp_path, monkeypatch):

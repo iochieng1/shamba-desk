@@ -1,5 +1,6 @@
-"""End-to-end graph test with a scripted model and the real MCP servers.
-Needs network (npx fetches the Open-Meteo MCP server; it calls Open-Meteo)."""
+"""End-to-end graph test with a scripted model and the real extension-desk MCP
+server. Weather is replayed from the cassette; the live variant needs network
+(npx fetches the Open-Meteo MCP server, which calls Open-Meteo)."""
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -9,8 +10,6 @@ from shamba_desk.agent import run_agent
 from shamba_desk.config import LLMConfig
 
 from .fakes import ScriptedLLM, call_id, tool_call
-
-pytestmark = pytest.mark.network
 
 CFG = LLMConfig("scripted", "", "scripted", "", 0.0, 0.0, 0.0)
 OTHERS = ["HH-001", "HH-002", "HH-003", "HH-004", "HH-005", "HH-006", "HH-008", "HH-009",
@@ -29,7 +28,9 @@ def draft(households, extra_cites=()):
     return reply
 
 
-async def test_agent_repairs_after_verifier_and_stops_at_gate(conn):
+@pytest.mark.parametrize("weather", ["replay", pytest.param("live", marks=pytest.mark.network)])
+async def test_agent_repairs_after_verifier_and_stops_at_gate(conn, monkeypatch, weather):
+    monkeypatch.setenv("SHAMBA_WEATHER", weather)
     script = [
         '{"steps": ["read households", "check rain", "draft"]}',
         AIMessage("", tool_calls=[
