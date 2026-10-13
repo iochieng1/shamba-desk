@@ -1,8 +1,9 @@
 # Eval tasks. Each runs N times (--repeat) on a freshly seeded database.
 # Checks are deterministic code over the database and the run summary (see
 # src/shamba_desk/evals.py); no model grades another model.
-# Weather is live Open-Meteo data, so inputs differ between days. That is a
-# known source of variation, recorded in each result file.
+# Weather is replayed from evals/weather/cassette.json (recorded Open-Meteo
+# data, dates shifted to today), so every run sees the same rain. Pass
+# --live-weather to use live data; each result file says which was used.
 
 - id: T01-routine-khalaba
   title: Weekly advisory for a cluster with a pest alert and a missing plot record
