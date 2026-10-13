@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import yaml
 from rich.console import Console
 
-from . import db, desk
+from . import db, desk, weather
 from .agent import run_agent
 from .config import load_llm_config
 
@@ -136,7 +136,9 @@ async def run_task(task: dict, i: int, run_dir) -> dict:
 
 def _md_table(results: list[dict], tasks: list[dict], meta: dict) -> str:
     lines = [f"Model `{meta['model']}` via {meta['provider']}, {meta['repeat']} runs per task, "
-             f"{meta['started']}.", "",
+             f"{meta['started']}. Weather: "
+             + (f"replayed, recorded {meta['weather_recorded_on']}."
+                if meta["weather"] == "replay" else "live Open-Meteo (varies by day)."), "",
              "| Task | Passed | Tool calls (mean ± sd) | Repairs (mean) | Cost/run $ | "
              "Failed checks |", "|---|---|---|---|---|---|"]
     for t in tasks:
@@ -171,7 +173,9 @@ async def run_suite(repeat: int = 3, only: list[str] | None = None) -> int:
     run_dir = db.ROOT / "var" / "evals" / stamp
     run_dir.mkdir(parents=True, exist_ok=True)
     meta = {"model": cfg.model, "provider": cfg.provider, "repeat": repeat,
-            "started": stamp, "temperature": cfg.temperature}
+            "started": stamp, "temperature": cfg.temperature, "weather": weather.mode()}
+    if meta["weather"] == "replay":
+        meta["weather_recorded_on"] = weather.load()["recorded_on"]
     results = []
     for i in range(1, repeat + 1):  # repeat-major, so a partial run still covers every task
         for task in tasks:

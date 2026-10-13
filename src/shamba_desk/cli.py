@@ -7,7 +7,8 @@
     shamba-desk send ADV-001 --officer "Name"      queue approved messages (simulated)
     shamba-desk log [--run RUN_ID]    the audit log
     shamba-desk runs                  past runs with tool calls, tokens and cost
-    shamba-desk eval --repeat 3       the eval suite (see EVALS.md)
+    shamba-desk eval --repeat 3       the eval suite on recorded weather (see EVALS.md)
+    shamba-desk weather record        record rainfall for every cluster, for replay
 """
 
 import argparse
@@ -16,6 +17,7 @@ import json
 import os
 import sqlite3
 import sys
+from datetime import date
 
 from rich.console import Console
 from rich.prompt import Prompt
@@ -174,6 +176,31 @@ def cmd_send(args) -> int:
     return 0
 
 
+def cmd_weather(args) -> int:
+    from . import weather
+    if args.action == "info":
+        try:
+            c = weather.load()
+        except FileNotFoundError as e:
+            console.print(f"[yellow]{e}[/]")
+            return 1
+        console.print(f"{weather.cassette_path()}: recorded {c['recorded_on']}, points "
+                      f"{', '.join(sorted(c['points']))}; replay mode is "
+                      f"{weather.mode()} (SHAMBA_WEATHER)")
+        return 0
+    from .desk import list_clusters
+    from .hub import record_weather
+    if not db.db_path().exists():
+        db.seed()
+    clusters = list_clusters(db.connect())
+    points = asyncio.run(record_weather([(c["lat"], c["lon"]) for c in clusters]))
+    first = next(iter(points.values()))["daily"]["time"]
+    recorded_on = date.fromisoformat(first[weather.RECORD_PAST_DAYS])
+    path = weather.save(points, recorded_on)
+    console.print(f"Recorded {len(points)} points for {recorded_on} to {path}")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="shamba-desk", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -203,9 +230,13 @@ def main(argv=None) -> int:
     e = sub.add_parser("eval", help="run the eval suite")
     e.add_argument("--repeat", type=int, default=3)
     e.add_argument("--only", nargs="*")
+    e.add_argument("--live-weather", action="store_true",
+                   help="call Open-Meteo instead of replaying the recorded cassette")
+    w = sub.add_parser("weather", help="recorded weather for reproducible evals")
+    w.add_argument("action", choices=["record", "info"])
     args = p.parse_args(argv)
 
-    if args.cmd not in ("seed", "config", "eval") and not db.db_path().exists():
+    if args.cmd not in ("seed", "config", "eval", "weather") and not db.db_path().exists():
         console.print(f"[dim]No database yet; seeding {db.db_path()}[/]")
         db.seed()
     if args.cmd == "seed":
@@ -238,7 +269,10 @@ def main(argv=None) -> int:
         return cmd_runs(args)
     if args.cmd == "eval":
         from .evals import run_suite
+        os.environ.setdefault("SHAMBA_WEATHER", "live" if args.live_weather else "replay")
         return asyncio.run(run_suite(args.repeat, args.only))
+    if args.cmd == "weather":
+        return cmd_weather(args)
     return 2
 
 
