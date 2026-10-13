@@ -35,15 +35,41 @@ class AdvisoryItem(BaseModel):
 
 
 def _out(value) -> str:
-    return json.dumps(value, ensure_ascii=False)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def _call(fn, *args, **kwargs) -> str:
+def _call(fn, *args, shape=None, **kwargs) -> str:
     conn = connect()
     try:
-        return _out(fn(conn, *args, **kwargs))
+        value = fn(conn, *args, **kwargs)
+        return _out(shape(value) if shape else value)
     finally:
         conn.close()
+
+
+def _drop_empty(row: dict, *skip: str) -> dict:
+    return {k: v for k, v in row.items() if k not in skip and v not in ("", None, [])}
+
+
+# What the model sees. A free-tier model allows ~7000 input tokens a minute and
+# every call resends the conversation, so results carry what the advice needs:
+# no delivery fields (name, channel, language), no empty values, and the record
+# age instead of the visit date. The full rows stay in the database.
+def _households_view(value: dict) -> dict:
+    c = value["cluster"]
+    return {"cluster": {k: c[k] for k in ("id", "ward", "lat", "lon", "nearest_market")},
+            "households": [
+                {**_drop_empty(h, "head_name", "channel", "language", "plots"),
+                 "plots": [_drop_empty(p, "last_visit") for p in h["plots"]]}
+                for h in value["households"]]}
+
+
+def _prices_view(value: dict) -> dict:
+    first = value["records"][0]
+    return {"crop": first["crop"], "unit": f"KES/{first['unit']}",
+            "records": [{k: r[k] for k in ("id", "market", "date", "price_kes")}
+                        for r in value["records"]],
+            "trends": value["trends"]}
 
 
 @mcp.tool()
@@ -57,14 +83,14 @@ def list_clusters() -> str:
 def get_cluster_households(cluster_id: str) -> str:
     """Households in a cluster with their plot records (crop, variety, planting date,
     stage) and data_flags for missing or stale records."""
-    return _call(desk.get_cluster_households, cluster_id)
+    return _call(desk.get_cluster_households, cluster_id, shape=_households_view)
 
 
 @mcp.tool()
 def get_market_prices(crop: str, market: str | None = None, days: int = 30) -> str:
     """Retail price records (KES/kg) for a crop at one or all markets over the last
     `days`, plus the per-market trend between the first and latest record."""
-    return _call(desk.get_market_prices, crop, market, days)
+    return _call(desk.get_market_prices, crop, market, days, shape=_prices_view)
 
 
 @mcp.tool()

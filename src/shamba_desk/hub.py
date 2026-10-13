@@ -54,6 +54,26 @@ BORROWED_TOOLS = {
 }
 
 
+def _slim(schema):
+    """Drop schema keys a model does not need (pydantic adds a title to every field)."""
+    if isinstance(schema, dict):
+        return {k: _slim(v) for k, v in schema.items() if k not in ("title", "default")
+                or isinstance(v, dict) and k == "title"}
+    if isinstance(schema, list):
+        return [_slim(v) for v in schema]
+    return schema
+
+
+def _compact_weather(text: str) -> str:
+    """Keep the rainfall series and its units; drop server metadata."""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    keep = ("latitude", "longitude", "timezone", "daily_units", "daily")
+    return json.dumps({k: data[k] for k in keep if k in data}, separators=(",", ":"))
+
+
 @dataclass
 class Fault:
     mode: str  # "once" or "always"
@@ -106,13 +126,14 @@ class ToolHub:
             if tool.name not in BORROWED_TOOLS:
                 return None  # 16 other tools exist; the agent does not need them
             return ToolHub._borrowed_spec(tool.name)
-        schema = json.loads(json.dumps(tool.inputSchema))
+        schema = _slim(json.loads(json.dumps(tool.inputSchema)))
         for arg in HIDDEN_ARGS:
             schema.get("properties", {}).pop(arg, None)
             if arg in schema.get("required", []):
                 schema["required"].remove(arg)
         return {"type": "function", "function": {"name": tool.name,
-                                                 "description": tool.description or "",
+                                                 "description": " ".join(
+                                                     (tool.description or "").split()),
                                                  "parameters": schema}}
 
     @staticmethod
@@ -170,6 +191,8 @@ class ToolHub:
             return False, (f"ERROR [{tag}] {error}\n(This call failed and cannot be cited. "
                            f"Fix the arguments, try another source, or record the gap.)"), call_id
         finish_call(self.conn, call_id, True, result=text)
+        if name in BORROWED_TOOLS:
+            text = _compact_weather(text)  # the audit log keeps the full result
         if len(text) > MAX_RESULT_CHARS:
             text = text[:MAX_RESULT_CHARS] + "\n... [truncated; full result in audit log]"
         return True, f"[{tag}] (cite as {tag})\n{text}", call_id

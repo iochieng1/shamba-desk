@@ -2,6 +2,7 @@
 fresh database. Results go to evals/results/ as JSON plus a Markdown table.
 Failures, errors and run-to-run spread are reported, not filtered out."""
 
+import asyncio
 import json
 import os
 import re
@@ -17,6 +18,36 @@ from .config import load_llm_config
 
 EVAL_DIR = db.ROOT / "evals"
 console = Console()
+# Provider quota errors say nothing about the agent: report them as "not run".
+QUOTA = re.compile(r"RateLimitError|rate_limit_exceeded|Request too large", re.I)
+DAILY_QUOTA = re.compile(r"per day|\bTPD\b|\bRPD\b")
+RETRY_IN = re.compile(r"try again in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?")
+
+
+USAGE = re.compile(r"Limit (\d+), Used (\d+), Requested (\d+)")
+RUN_TOKENS_GUESS = 40_000
+
+
+def _retry_after_s(status: str, run_tokens: int = 0) -> float:
+    """How long to wait before retrying a quota-refused run.
+
+    The provider's hint covers only the one request it refused. Its daily quota
+    refills gradually, so retrying then would fail again a few calls into the run
+    and waste what had refilled. With the limit, usage and request size in the
+    message, wait until a whole run (`run_tokens`) fits. 30 min if it says nothing."""
+    m = RETRY_IN.search(status)
+    if not m or not any(m.groups()):
+        return 1800.0
+    h, mins, secs = (float(g or 0) for g in m.groups())
+    hint = h * 3600 + mins * 60 + secs
+    usage = USAGE.search(status)
+    if usage and run_tokens:
+        limit, used, requested = (int(g) for g in usage.groups())
+        shortfall = requested - (limit - used)
+        if shortfall > 0 and hint > 0:
+            per_s = shortfall / hint
+            hint = max(hint, (run_tokens - (limit - used)) / per_s)
+    return hint + 60
 
 
 def _advisory(conn, run_id):
@@ -114,6 +145,15 @@ async def run_task(task: dict, i: int, run_dir) -> dict:
     for sql in task.get("setup", []):
         conn.execute(sql)
     summary = await run_agent(task["cluster"], task.get("task"))
+    if summary["status"].startswith("error") and QUOTA.search(summary["status"]):
+        daily = bool(DAILY_QUOTA.search(summary["status"]))
+        console.print(f"[yellow]NOT RUN[/] {task['id']} #{i}: provider "
+                      f"{'daily ' if daily else ''}quota reached")
+        return {"task": task["id"], "repeat": i, "passed": None, "not_run": "quota",
+                "daily_quota": daily, "checks": {},
+                **{k: summary[k] for k in ("run_id", "status", "tool_calls", "repairs",
+                                           "llm_calls", "tokens_in", "tokens_out",
+                                           "cost_usd", "seconds")}}
     checks = {}
     for name, arg in task["checks"].items():
         ok, detail = check(name, arg, conn, summary["run_id"], summary, task["cluster"])
@@ -141,9 +181,13 @@ def _md_table(results: list[dict], tasks: list[dict], meta: dict) -> str:
                 if meta["weather"] == "replay" else "live Open-Meteo (varies by day)."), "",
              "| Task | Passed | Tool calls (mean ± sd) | Repairs (mean) | Cost/run $ | "
              "Failed checks |", "|---|---|---|---|---|---|"]
+    ran_all = [r for r in results if r["passed"] is not None]
     for t in tasks:
-        rs = [r for r in results if r["task"] == t["id"]]
+        rs = [r for r in ran_all if r["task"] == t["id"]]
+        skipped = sum(1 for r in results if r["task"] == t["id"] and r["passed"] is None)
         if not rs:
+            if skipped:
+                lines.append(f"| {t['id']} | not run (quota) | - | - | - | - |")
             continue
         calls = [r["tool_calls"] for r in rs]
         sd = statistics.stdev(calls) if len(calls) > 1 else 0.0
@@ -153,18 +197,26 @@ def _md_table(results: list[dict], tasks: list[dict], meta: dict) -> str:
                      f"{statistics.mean(r['repairs'] for r in rs):.1f} | "
                      f"{statistics.mean(r['cost_usd'] for r in rs):.4f} | "
                      f"{', '.join(failed) or '-'} |")
-    total = sum(r["passed"] for r in results)
-    per_repeat = [sum(r["passed"] for r in results if r["repeat"] == i) / len(tasks)
-                  for i in range(1, meta["repeat"] + 1)]
+    if not ran_all:
+        return "\n".join(lines + ["", "**No runs completed (provider quota).**"])
+    total = sum(r["passed"] for r in ran_all)
+    per_repeat = []
+    for i in range(1, meta["repeat"] + 1):
+        rs = [r for r in ran_all if r["repeat"] == i]
+        if rs:
+            per_repeat.append(sum(r["passed"] for r in rs) / len(rs))
     spread = (f"; pass rate per repeat {', '.join(f'{p:.0%}' for p in per_repeat)}"
               if len(per_repeat) > 1 else "")
-    lines += ["", f"**Overall: {total}/{len(results)} runs passed{spread}. Mean cost per run "
-              f"${statistics.mean(r['cost_usd'] for r in results):.4f}, mean time "
-              f"{statistics.mean(r['seconds'] for r in results):.0f}s.**"]
+    not_run = len(results) - len(ran_all)
+    skipped = f" {not_run} not run (provider quota)." if not_run else ""
+    lines += ["", f"**Overall: {total}/{len(ran_all)} completed runs passed{spread}.{skipped} "
+              f"Mean cost per run ${statistics.mean(r['cost_usd'] for r in ran_all):.4f}, "
+              f"mean time {statistics.mean(r['seconds'] for r in ran_all):.0f}s.**"]
     return "\n".join(lines)
 
 
-async def run_suite(repeat: int = 3, only: list[str] | None = None) -> int:
+async def run_suite(repeat: int = 3, only: list[str] | None = None,
+                    wait_on_quota: bool = False) -> int:
     tasks = yaml.safe_load((EVAL_DIR / "tasks.yaml").read_text())
     if only:
         tasks = [t for t in tasks if any(t["id"].startswith(o) for o in only)]
@@ -177,9 +229,29 @@ async def run_suite(repeat: int = 3, only: list[str] | None = None) -> int:
     if meta["weather"] == "replay":
         meta["weather_recorded_on"] = weather.load()["recorded_on"]
     results = []
+    stopped = False
     for i in range(1, repeat + 1):  # repeat-major, so a partial run still covers every task
         for task in tasks:
-            results.append(await run_task(task, i, run_dir))
+            if stopped:
+                results.append({"task": task["id"], "repeat": i, "passed": None,
+                                "not_run": "quota", "checks": {}})
+                continue
+            result = await run_task(task, i, run_dir)
+            while wait_on_quota and result.get("not_run"):
+                done = [r["tokens_in"] + r["tokens_out"] for r in results if r.get("passed")
+                        is not None]
+                need = int(max(done) * 1.2) if done else RUN_TOKENS_GUESS
+                wait = _retry_after_s(result["status"], need if result.get("daily_quota")
+                                      else 0)
+                console.print(f"[yellow]Waiting {wait / 60:.0f} min for the provider quota, "
+                              f"then retrying {task['id']} #{i}.[/]")
+                await asyncio.sleep(wait)
+                result = await run_task(task, i, run_dir)
+            results.append(result)
+            if results[-1].get("daily_quota"):
+                console.print("[yellow]Daily provider quota reached; stopping. Re-run the "
+                              "remaining tasks later with --only.[/]")
+                stopped = True
     out = EVAL_DIR / "results"
     out.mkdir(exist_ok=True)
     slug = re.sub(r"[^a-z0-9]+", "-", cfg.model.lower()).strip("-")
