@@ -28,3 +28,13 @@ def test_retry_after_is_read_from_the_provider_message():
     assert evals._retry_after_s("try again in 1h2m3s") == 3723 + 60
     assert evals._retry_after_s("try again in 9.5s") == 69.5
     assert evals._retry_after_s("no hint") == 1800.0
+
+
+def test_daily_quota_waits_until_a_whole_run_fits():
+    msg = ("tokens per day (TPD): Limit 200000, Used 197801, Requested 3356. "
+           "Please try again in 8m19.824s.")
+    per_s = (3356 - 2199) / 499.824
+    expected = (40000 - 2199) / per_s + 60
+    assert abs(evals._retry_after_s(msg, 40000) - expected) < 1
+    assert 4 * 3600 < expected < 5 * 3600  # ~4.5 h, not 8 min
+    assert evals._retry_after_s(msg) == 499.824 + 60  # per-minute limits: use the hint

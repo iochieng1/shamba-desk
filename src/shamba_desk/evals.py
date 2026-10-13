@@ -24,13 +24,30 @@ DAILY_QUOTA = re.compile(r"per day|\bTPD\b|\bRPD\b")
 RETRY_IN = re.compile(r"try again in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?")
 
 
-def _retry_after_s(status: str) -> float:
-    """Seconds the provider asked us to wait, plus a margin; 30 min if it did not say."""
+USAGE = re.compile(r"Limit (\d+), Used (\d+), Requested (\d+)")
+RUN_TOKENS_GUESS = 40_000
+
+
+def _retry_after_s(status: str, run_tokens: int = 0) -> float:
+    """How long to wait before retrying a quota-refused run.
+
+    The provider's hint covers only the one request it refused. Its daily quota
+    refills gradually, so retrying then would fail again a few calls into the run
+    and waste what had refilled. With the limit, usage and request size in the
+    message, wait until a whole run (`run_tokens`) fits. 30 min if it says nothing."""
     m = RETRY_IN.search(status)
     if not m or not any(m.groups()):
         return 1800.0
     h, mins, secs = (float(g or 0) for g in m.groups())
-    return h * 3600 + mins * 60 + secs + 60
+    hint = h * 3600 + mins * 60 + secs
+    usage = USAGE.search(status)
+    if usage and run_tokens:
+        limit, used, requested = (int(g) for g in usage.groups())
+        shortfall = requested - (limit - used)
+        if shortfall > 0 and hint > 0:
+            per_s = shortfall / hint
+            hint = max(hint, (run_tokens - (limit - used)) / per_s)
+    return hint + 60
 
 
 def _advisory(conn, run_id):
@@ -221,7 +238,11 @@ async def run_suite(repeat: int = 3, only: list[str] | None = None,
                 continue
             result = await run_task(task, i, run_dir)
             while wait_on_quota and result.get("not_run"):
-                wait = _retry_after_s(result["status"])
+                done = [r["tokens_in"] + r["tokens_out"] for r in results if r.get("passed")
+                        is not None]
+                need = int(max(done) * 1.2) if done else RUN_TOKENS_GUESS
+                wait = _retry_after_s(result["status"], need if result.get("daily_quota")
+                                      else 0)
                 console.print(f"[yellow]Waiting {wait / 60:.0f} min for the provider quota, "
                               f"then retrying {task['id']} #{i}.[/]")
                 await asyncio.sleep(wait)
