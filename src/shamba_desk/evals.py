@@ -2,6 +2,7 @@
 fresh database. Results go to evals/results/ as JSON plus a Markdown table.
 Failures, errors and run-to-run spread are reported, not filtered out."""
 
+import asyncio
 import json
 import os
 import re
@@ -20,6 +21,16 @@ console = Console()
 # Provider quota errors say nothing about the agent: report them as "not run".
 QUOTA = re.compile(r"RateLimitError|rate_limit_exceeded|Request too large", re.I)
 DAILY_QUOTA = re.compile(r"per day|\bTPD\b|\bRPD\b")
+RETRY_IN = re.compile(r"try again in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?")
+
+
+def _retry_after_s(status: str) -> float:
+    """Seconds the provider asked us to wait, plus a margin; 30 min if it did not say."""
+    m = RETRY_IN.search(status)
+    if not m or not any(m.groups()):
+        return 1800.0
+    h, mins, secs = (float(g or 0) for g in m.groups())
+    return h * 3600 + mins * 60 + secs + 60
 
 
 def _advisory(conn, run_id):
@@ -187,7 +198,8 @@ def _md_table(results: list[dict], tasks: list[dict], meta: dict) -> str:
     return "\n".join(lines)
 
 
-async def run_suite(repeat: int = 3, only: list[str] | None = None) -> int:
+async def run_suite(repeat: int = 3, only: list[str] | None = None,
+                    wait_on_quota: bool = False) -> int:
     tasks = yaml.safe_load((EVAL_DIR / "tasks.yaml").read_text())
     if only:
         tasks = [t for t in tasks if any(t["id"].startswith(o) for o in only)]
@@ -207,7 +219,14 @@ async def run_suite(repeat: int = 3, only: list[str] | None = None) -> int:
                 results.append({"task": task["id"], "repeat": i, "passed": None,
                                 "not_run": "quota", "checks": {}})
                 continue
-            results.append(await run_task(task, i, run_dir))
+            result = await run_task(task, i, run_dir)
+            while wait_on_quota and result.get("not_run"):
+                wait = _retry_after_s(result["status"])
+                console.print(f"[yellow]Waiting {wait / 60:.0f} min for the provider quota, "
+                              f"then retrying {task['id']} #{i}.[/]")
+                await asyncio.sleep(wait)
+                result = await run_task(task, i, run_dir)
+            results.append(result)
             if results[-1].get("daily_quota"):
                 console.print("[yellow]Daily provider quota reached; stopping. Re-run the "
                               "remaining tasks later with --only.[/]")

@@ -17,6 +17,8 @@ uv run shamba-desk run CL-KHA
 docker compose run --rm desk     # Ollama + qwen2.5:7b, first start downloads ~4.7 GB
 ```
 
+Groq's free tier works (default model `qwen/qwen3.8-27b`): a run is kept under its 7,000 input-tokens-per-minute limit by trimming tool results and history. Its daily limit (200k tokens) allows about 6 runs a day, so `shamba-desk eval --wait-on-quota` waits for the quota instead of skipping tasks. The local Docker path needs a GPU or ~8 GB of free RAM; on a CPU-only laptop with less, a single model call can take minutes.
+
 Needs Python 3.12 + [uv](https://docs.astral.sh/uv/) and Node 22+ (for the borrowed weather MCP server), or just Docker.
 
 ## What it does
@@ -65,7 +67,7 @@ shamba-desk show ADV-001
 shamba-desk approve|reject ADV-001 --officer "Name" [--note ...]
 shamba-desk send ADV-001 --officer "Name"     # refused unless approved
 shamba-desk log [--run RUN_ID] | runs
-shamba-desk eval --repeat 3 [--only T04] [--live-weather]
+shamba-desk eval --repeat 3 [--only T04] [--wait-on-quota] [--live-weather]
 shamba-desk weather record | info              # the recorded rainfall evals replay
 ```
 
@@ -82,9 +84,9 @@ shamba-desk weather record | info              # the recorded rainfall evals rep
 
 ## What is unfinished
 
-- **No eval results yet.** The suite is built and tested with a scripted model, but has not been run against a real open-weights model on this machine (no GPU or API key during the build).
+- **Eval results are partial.** On `qwen/qwen3.8-27b` (Groq free tier) the first tasks pass; the full suite is running at free-tier pace. Quota refusals are reported as "not run", never as passes or failures.
 - **Not yet validated with an extension officer.** The guidance in `data/office_guidance.md` is generic and needs officer review.
-- Docker Compose path written, but its full run is not yet verified.
+- Docker Compose builds, pulls the model and starts the agent, but a full run has not finished on the CPU-only build machine (too slow; see Quick start).
 - Prices and households are synthetic; delivery (SMS/USSD) is a simulated outbox.
 - EVALS.md and the demo video are still to come.
 

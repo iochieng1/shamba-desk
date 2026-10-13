@@ -230,6 +230,9 @@ def main(argv=None) -> int:
     e = sub.add_parser("eval", help="run the eval suite")
     e.add_argument("--repeat", type=int, default=3)
     e.add_argument("--only", nargs="*")
+    e.add_argument("--wait-on-quota", action="store_true",
+                   help="when the provider's quota is reached, wait and retry instead of "
+                        "skipping (free tiers: the suite may take days)")
     e.add_argument("--live-weather", action="store_true",
                    help="call Open-Meteo instead of replaying the recorded cassette")
     w = sub.add_parser("weather", help="recorded weather for reproducible evals")
@@ -270,7 +273,7 @@ def main(argv=None) -> int:
     if args.cmd == "eval":
         from .evals import run_suite
         os.environ.setdefault("SHAMBA_WEATHER", "live" if args.live_weather else "replay")
-        return asyncio.run(run_suite(args.repeat, args.only))
+        return asyncio.run(run_suite(args.repeat, args.only, args.wait_on_quota))
     if args.cmd == "weather":
         return cmd_weather(args)
     return 2

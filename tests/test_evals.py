@@ -21,3 +21,10 @@ async def test_unknown_cluster_task_passes_its_checks(tmp_path, monkeypatch):
     task = next(t for t in tasks if t["id"].startswith("T08"))
     result = await evals.run_task(task, 1, tmp_path)
     assert result["passed"], result["checks"]
+
+
+def test_retry_after_is_read_from_the_provider_message():
+    assert evals._retry_after_s("Please try again in 41m27.888s. Need more") == 41 * 60 + 27.888 + 60
+    assert evals._retry_after_s("try again in 1h2m3s") == 3723 + 60
+    assert evals._retry_after_s("try again in 9.5s") == 69.5
+    assert evals._retry_after_s("no hint") == 1800.0
