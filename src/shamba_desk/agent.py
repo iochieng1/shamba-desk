@@ -24,6 +24,7 @@ from typing import Annotated, Any, Callable, TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
+from openai import BadRequestError
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -36,6 +37,10 @@ from .hub import ToolHub
 
 MAX_TOOL_CALLS = 30
 MAX_REPAIRS = 2
+MALFORMED_RETRIES = 2
+MALFORMED_HINT = ("Your last tool call could not be parsed, most likely because it was too long "
+                  "and was cut off. Make the same call again, shorter: one short sentence per "
+                  "action and reason, ids only in citations, no commentary before the call.")
 
 DEFAULT_TASK = (
     "Prepare this week's advisory for cluster {cluster_id}. Check rainfall (recent days and "
@@ -61,7 +66,8 @@ not crop advice.
 5. If a tool fails, read the error and fix the arguments or work around it. Never cite a failed \
 call. If rainfall cannot be checked, give no planting advice and say rainfall was unavailable.
 6. Group households with the same crop, stage and situation into one item. Write action and \
-reason in plain words a farmer would accept, with the numbers (mm of rain, KES per kg).
+reason in plain words a farmer would accept, with the numbers (mm of rain, KES per kg). Keep \
+each to one short sentence; ids go in citations, not in the text.
 7. draft_advisory replaces your earlier draft in this run, so the final call must contain every \
 item.
 
@@ -95,6 +101,7 @@ class State(TypedDict):
     problems: list[str]
     status: str
     advisory_id: str | None
+    draft_done: bool
 
 
 @dataclass
@@ -126,6 +133,45 @@ def _salvage_tool_calls(text: str, known: set[str]) -> list[dict]:
                 calls.append({"name": o["name"], "args": args,
                               "id": f"salvaged_{uuid.uuid4().hex[:8]}", "type": "tool_call"})
     return calls
+
+
+OLD_PROSE_CHARS = 400
+
+
+def _shorten_old_prose(messages: list) -> list:
+    """The model's earlier commentary is resent on every turn but the numbers it
+    quotes are in the tool results. Keep the start of each, except the latest."""
+    last_ai = max((i for i, m in enumerate(messages) if isinstance(m, AIMessage)), default=-1)
+    out = list(messages)
+    for i, m in enumerate(out):
+        if isinstance(m, AIMessage) and i != last_ai and len(m.content) > OLD_PROSE_CHARS:
+            out[i] = AIMessage(content=m.content[:OLD_PROSE_CHARS] + " […]",
+                               tool_calls=m.tool_calls, id=m.id)
+    return out
+
+
+def _accepted_complete_draft(name: str, ok: bool, text: str) -> bool:
+    """A draft that was saved and covers every household: nothing left to act on."""
+    if name != "draft_advisory" or not ok:
+        return False
+    try:
+        return json.loads(text.split("\n", 1)[1]).get("uncovered_households") == []
+    except (IndexError, ValueError, AttributeError):
+        return False
+
+
+def _elide_old_drafts(messages: list) -> list:
+    """draft_advisory replaces the run's previous draft, so only the latest call's
+    arguments matter. Shorten earlier ones; on a free-tier model every token in the
+    history is paid again on each turn. The audit log keeps them in full."""
+    drafts = [i for i, m in enumerate(messages) if isinstance(m, AIMessage)
+              and any(c["name"] == "draft_advisory" for c in m.tool_calls)]
+    out = list(messages)
+    for i in drafts[:-1]:
+        calls = [{**c, "args": {"note": "earlier draft, replaced by a later call"}}
+                 if c["name"] == "draft_advisory" else c for c in out[i].tool_calls]
+        out[i] = AIMessage(content=out[i].content, tool_calls=calls, id=out[i].id)
+    return out
 
 
 def make_llm(cfg: LLMConfig):
@@ -193,7 +239,18 @@ def build_graph(hub: ToolHub, cfg: LLMConfig, cluster_id: str, stats: RunStats,
         ]}
 
     async def act(state: State):
-        resp = await chat(llm_tools, [system] + state["messages"], "act")
+        messages = [system] + _shorten_old_prose(_elide_old_drafts(state["messages"]))
+        for attempt in range(MALFORMED_RETRIES + 1):
+            try:
+                resp = await chat(llm_tools, messages, "act")
+                break
+            except BadRequestError as e:
+                # Hosted providers reject a cut-off or malformed tool call outright
+                # (Groq: tool_use_failed). Ask again, shorter, instead of failing.
+                if "tool_use_failed" not in str(e) or attempt == MALFORMED_RETRIES:
+                    raise
+                emit("note", "tool call was malformed or cut off; asking for a shorter one")
+                messages = messages + [HumanMessage(MALFORMED_HINT)]
         resp.content = _strip_think(resp.content)
         if not resp.tool_calls and resp.content:
             salvaged = _salvage_tool_calls(resp.content, known_tools)
@@ -206,18 +263,24 @@ def build_graph(hub: ToolHub, cfg: LLMConfig, cluster_id: str, stats: RunStats,
 
     async def tools(state: State):
         last: AIMessage = state["messages"][-1]
-        out = []
+        out, draft_done = [], False
         for c in last.tool_calls:
             emit("call", {"name": c["name"], "args": c["args"]})
             ok, text, call_id = await hub.call(c["name"], c["args"])
             emit("result", {"name": c["name"], "ok": ok, "call_id": call_id, "text": text})
             out.append(ToolMessage(content=text, tool_call_id=c["id"], name=c["name"]))
+            draft_done = _accepted_complete_draft(c["name"], ok, text) or draft_done
         for c in getattr(last, "invalid_tool_calls", []) or []:
             msg = f"ERROR: arguments for {c.get('name')} were not valid JSON: {c.get('error')}"
             emit("result", {"name": c.get("name"), "ok": False, "call_id": None, "text": msg})
             out.append(ToolMessage(content=msg, tool_call_id=c["id"], name=c.get("name") or ""))
         n = len(last.tool_calls) + len(getattr(last, "invalid_tool_calls", []) or [])
-        return {"messages": out, "tool_calls": state["tool_calls"] + n}
+        return {"messages": out, "tool_calls": state["tool_calls"] + n, "draft_done": draft_done}
+
+    def after_tools(state: State):
+        # Skip the model's "done" turn after a complete draft: the verifier decides,
+        # and on a rate-limited model that turn is the largest request of the run.
+        return "verify" if state.get("draft_done") else "act"
 
     def after_act(state: State):
         last = state["messages"][-1]
@@ -307,7 +370,7 @@ def build_graph(hub: ToolHub, cfg: LLMConfig, cluster_id: str, stats: RunStats,
     g.add_edge(START, "plan")
     g.add_edge("plan", "act")
     g.add_conditional_edges("act", after_act, ["tools", "verify"])
-    g.add_edge("tools", "act")
+    g.add_conditional_edges("tools", after_tools, ["act", "verify"])
     g.add_conditional_edges("verify", after_verify, ["act", "gate", END])
     g.add_edge("gate", END)
     return g.compile(checkpointer=InMemorySaver())
@@ -336,7 +399,7 @@ async def run_agent(cluster_id: str, task: str | None = None,
         graph = build_graph(hub, cfg, cluster_id, stats, emit, llm)
         config = {"configurable": {"thread_id": run_id}, "recursion_limit": 200}
         init = {"messages": [HumanMessage(task)], "plan": [], "tool_calls": 0, "repairs": 0,
-                "problems": [], "status": "", "advisory_id": None}
+                "problems": [], "status": "", "advisory_id": None, "draft_done": False}
         error = None
         try:
             result = await graph.ainvoke(init, config)

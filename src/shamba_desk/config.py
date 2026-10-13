@@ -21,7 +21,7 @@ PRESETS = {
                "timeout": 900, "max_retries": 0},
     "groq": {"base_url": "https://api.groq.com/openai/v1", "model": "qwen/qwen3.8-27b",
              "key_env": "GROQ_API_KEY", "price_in": 0.29, "price_out": 0.59,
-             "max_retries": 8, "max_tokens": 900},
+             "max_retries": 8, "max_tokens": 1000},
     "openrouter": {"base_url": "https://openrouter.ai/api/v1",
                    "model": "qwen/qwen-2.5-72b-instruct",
                    "key_env": "OPENROUTER_API_KEY", "price_in": 0.12, "price_out": 0.39},
