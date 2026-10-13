@@ -131,8 +131,8 @@ def _salvage_tool_calls(text: str, known: set[str]) -> list[dict]:
 def make_llm(cfg: LLMConfig):
     extra = {"reasoning_format": "hidden"} if cfg.provider == "groq" else None
     return ChatOpenAI(model=cfg.model, base_url=cfg.base_url, api_key=cfg.api_key,
-                      temperature=cfg.temperature, max_retries=3, timeout=180,
-                      extra_body=extra)
+                      temperature=cfg.temperature, max_retries=cfg.max_retries,
+                      timeout=cfg.timeout, max_tokens=cfg.max_tokens, extra_body=extra)
 
 
 def build_graph(hub: ToolHub, cfg: LLMConfig, cluster_id: str, stats: RunStats,
@@ -345,7 +345,8 @@ async def run_agent(cluster_id: str, task: str | None = None,
                 result = await graph.ainvoke(Command(resume=decide(info)), config)
         except Exception as e:  # recorded, not hidden: evals count these as failures
             error = f"{type(e).__name__}: {e}"
-            result = {"status": "error", "messages": [], "tool_calls": 0, "repairs": 0}
+            # keep the counters reached before the failure, so evals report them
+            result = {**graph.get_state(config).values, "status": "error"}
         final = next((m.content for m in reversed(result.get("messages", []))
                       if isinstance(m, AIMessage) and m.content), "")
         cost = cfg.cost(stats.tokens_in, stats.tokens_out)
