@@ -34,6 +34,8 @@ plan ──> act ⇄ tools ──> verify ──(problems)──> act      (max 
 - **Recovers:** failed tool calls come back as readable errors, transient failures are retried once, and tool calls a small model writes as text are salvaged.
 - **Stops at the gate** (LangGraph `interrupt`). Nothing is sent and nothing is ordered by the agent.
 
+How the parts fit, where each safety rule is enforced, and the trade-offs: [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## MCP servers
 
 | Server | Built or borrowed | Tools |
@@ -84,7 +86,7 @@ shamba-desk weather record | info              # the recorded rainfall evals rep
 - **Not yet validated with an extension officer.** The guidance in `data/office_guidance.md` is generic and needs officer review.
 - Docker Compose path written, but its full run is not yet verified.
 - Prices and households are synthetic; delivery (SMS/USSD) is a simulated outbox.
-- ARCHITECTURE.md, EVALS.md and the demo video are still to come.
+- EVALS.md and the demo video are still to come.
 
 ## Licence
 
